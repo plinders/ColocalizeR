@@ -3,7 +3,7 @@
 
 
 #Define function that takes a directory as single argument, analysis will be performed on files inside said directory
-RColocalizer <- function(dir) {
+ColocalizeR <- function(dir) {
   #Set working directory to dir supplied, use directory name as filename for PDF later
   folder_name <- basename(dir)
   setwd(dir)
@@ -21,16 +21,45 @@ RColocalizer <- function(dir) {
   fluor2 <- readline(prompt = "What fluorophore was used for the second channel? ")
   
   #Read images
-  input_files <- dir(pattern = "cel..oif$")
-  images_list <- lapply(input_files, read.image)
-  names(images_list) <- paste(input_files, seq_along(images_list))
+  input_files <- dir(pattern = ".oif$|.lif$")
+  
+  #set bools to false so they don't break the script
+  oif_bool <- FALSE
+  lif_bool <- FALSE
+  
+  if (sum(grepl(".oif$", input_files)) / length(input_files) == 1) {
+    images_list <- lapply(input_files, read.image)
+    oif_meta <- list()
+    for (i in seq_along(images_list)) {
+      oif_meta[[i]] <- globalMetadata(images_list[[i]])
+    }
+    oif_bool <- TRUE
+  } else if (sum(grepl(".lif$", input_files)) / length(input_files) == 1) {
+    images_list <- read.image(input_files)
+    lif_meta <- list()
+    for (i in seq_along(images_list)) {
+      lif_meta[[i]] <- seriesMetadata(images_list[[i]])
+    }
+    lif_bool <- TRUE
+  } else {
+    stop("Only upload .lif or .oif files seperately.")
+  }
+  
+  
+  #names(images_list) <- paste(input_files, seq_along(images_list))
  
   #Turn images into matrices, this will become a for loop for automated processing of all files
   #Channel 1 = GFP, Channel 2 = mCh, this could become a user input thing once I figure out how that works
   for (i in seq_along(images_list)) {
     
+    if (oif_bool == TRUE) {
+      img_name <- file_path_sans_ext(oif_meta[[i]]$`[File Info] DataName`)
+    } else if (lif_bool == TRUE) {
+      img_name <- lif_meta[[i]]$`Image name`
+    }
+    
     #Start pdf, plots will go in here
-    pdf(paste(folder_name, "_cel", i, ".pdf", sep = ""), paper = "a4")
+    pdf(paste(folder_name, "_", img_name, ".pdf", sep = ""), paper = "a4")
 
     chan1_df <- data.frame(getFrame(images_list[[i]], chan1))
     chan2_df <- data.frame(getFrame(images_list[[i]], chan2))
@@ -54,13 +83,12 @@ RColocalizer <- function(dir) {
     chan1_vect <- as.vector(as.matrix(chan1_df_16bit))
     chan2_vect <- as.vector(as.matrix(chan2_df_16bit))
     
-    #Exclude values <200 AU
-    chan1_vect[chan1_vect < 200] <- NA
-    chan2_vect[chan2_vect < 200] <- NA
-    
+    #Exclude pixels that are < 20% of max in both channels
+    chan1_vect[chan1_vect < (0.20 * max(chan1_vect)) & chan2_vect < (0.20 * max(chan2_vect))] <- NA
+
     #Plot new histograms
-    hist(chan1_vect, main = "Filter < 200 AU", xlab = paste(fluor1, "intensity"))
-    hist(chan2_vect, main = "Filter < 200 AU", xlab = paste(fluor2, "intensity"))
+    hist(chan1_vect, main = "Filter < 20%", xlab = paste(fluor1, "intensity"))
+    hist(chan2_vect, main = "Filter < 20%", xlab = paste(fluor2, "intensity"))
     
     #Normalize channels based on mean fluorescent intensity
     chan1_relative <- chan1_vect / mean(chan1_vect, na.rm = TRUE)
@@ -85,7 +113,7 @@ RColocalizer <- function(dir) {
     final_model <- lm(chan2_trans ~ chan1_relative - 1, data = scatter_df)
     dev.off()
     #Create .txt file to output regression results
-    sink(file = paste(folder_name, "_cel", i, ".txt", sep = ""), type = "output")
+    sink(file = paste(folder_name, "_", img_name, ".txt", sep = ""), type = "output")
     print(summary(final_model))
     sink()
     #Print to console to keep track of progress
