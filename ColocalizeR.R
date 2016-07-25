@@ -13,6 +13,7 @@ ColocalizeR <- function(dir) {
   require("devtools")
   require("EBImage")
   require("RBioFormats")
+  require("tools")
   
   #Ask for user input to select channels, assume the same values are held per data set
   chan1 <- as.numeric(readline(prompt = "What is the first channel index for analysis? "))
