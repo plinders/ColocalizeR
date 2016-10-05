@@ -24,7 +24,7 @@ ColocalizeR <- function(dir) {
   fluor2 <- readline(prompt = "What fluorophore was used for the second channel? ")
   
   #Read image file list
-  input_files <- dir(pattern = ".oif$|.lif$")
+  input_files <- dir(pattern = ".oif$|.lif$|.lsm$|.tif$")
   
   #set up parallel computing for image reading optimization
   total_cores <- detectCores() - 1
@@ -33,6 +33,8 @@ ColocalizeR <- function(dir) {
   #set bools to false so they don't break the script
   oif_bool <- FALSE
   lif_bool <- FALSE
+  lsm_bool <- FALSE
+  tif_bool <- FALSE
   
   if (sum(grepl(".oif$", input_files)) / length(input_files) == 1) {
     images_list <- parLapply(cl, input_files, read.image)
@@ -48,28 +50,47 @@ ColocalizeR <- function(dir) {
       lif_meta[[i]] <- seriesMetadata(images_list[[i]])
     }
     lif_bool <- TRUE
+  } else if (sum(grepl(".lsm$", input_files)) / length(input_files) == 1) {
+    images_list <- parLapply(cl, input_files, read.image)
+    lsm_meta <- list()
+    for (i in seq_along(images_list)) {
+      lsm_meta[[i]] <- seriesMetadata(images_list[[i]])
+    }
+    lsm_bool <- TRUE
+  } else if (sum(grepl(".tif$", input_files)) / length(input_files) == 1) {
+    images_list <- parLapply(cl, input_files, read.image)
+    tif_meta <- list()
+    for (i in seq_along(images_list)) {
+      tif_meta[[i]] <- file_path_sans_ext(input_files[[i]])
+    }
+    tif_bool <- TRUE
   } else {
-    stop("Only upload .lif or .oif files seperately.")
+    stop("Only upload .lif, .oif or .lsm files seperately.")
   }
   
-  #stop cluster to free up memory
-  stopCluster(cl)
+
+  #Turn images into matrices, below is the function that will be called later with parLapply
   
-  
-  #names(images_list) <- paste(input_files, seq_along(images_list))
-  
-  #Turn images into matrices, this will become a for loop for automated processing of all files
-  #Channel 1 = GFP, Channel 2 = mCh, this could become a user input thing once I figure out how that works
-  for (i in seq_along(images_list)) {
-    
+  colocmainloop <- function(i) {
+    require("rJava")
+    require("devtools")
+    require("EBImage")
+    require("RBioFormats")
+    require("tools")
+    require("data.table")
+
     if (oif_bool == TRUE) {
       img_name <- file_path_sans_ext(oif_meta[[i]]$`[File Info] DataName`)
     } else if (lif_bool == TRUE) {
       img_name <- lif_meta[[i]]$`Image name`
+    } else if (lsm_bool == TRUE) {
+      img_name <- lsm_meta[[i]]$`Recording Name #1`
+    } else if (tif_bool == TRUE) {
+      img_name <- tif_meta[[i]]
     }
     
     #Start pdf, plots will go in here
-    pdf(paste(folder_name, "_", img_name, ".pdf", sep = ""), paper = "a4")
+    pdf(paste(folder_name, "_", i, "_", img_name, ".pdf", sep = ""), paper = "a4")
     
     chan1_dt <- data.table(getFrame(images_list[[i]], chan1))
     chan2_dt <- data.table(getFrame(images_list[[i]], chan2))
@@ -123,10 +144,14 @@ ColocalizeR <- function(dir) {
     final_model <- lm(chan2_trans ~ chan1_relative - 1, data = scatter_dt)
     dev.off()
     #Create .txt file to output regression results
-    sink(file = paste(folder_name, "_", img_name, ".txt", sep = ""), type = "output")
+    sink(file = paste(folder_name, "_", i, "_", img_name, ".txt", sep = ""), type = "output")
     print(summary(final_model))
     sink()
     #Print to console to keep track of progress
     print(i)
   }
+  
+  parLapply(cl, seq_along(images_list), colocmainloop)  
+  stopCluster(cl)
+  
 }
