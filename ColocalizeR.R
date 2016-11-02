@@ -24,17 +24,20 @@ ColocalizeR <- function(dir) {
   fluor2 <- readline(prompt = "What fluorophore was used for the second channel? ")
   
   #Read image file list
-  input_files <- dir(pattern = ".oif$|.lif$|.lsm$|.tif$")
+  input_files <- dir(pattern = ".oif$|.lif$|.lsm$|.tif$|.czi$")
   
   #set up parallel computing for image reading optimization
   total_cores <- detectCores() - 1
   cl <- makeCluster(total_cores)
   
   #set bools to false so they don't break the script
+  twelvebit_bool <- TRUE
+  sixteenbit_bool <- FALSE
   oif_bool <- FALSE
   lif_bool <- FALSE
   lsm_bool <- FALSE
   tif_bool <- FALSE
+  czi_bool <- FALSE
   
   if (sum(grepl(".oif$", input_files)) / length(input_files) == 1) {
     images_list <- parLapply(cl, input_files, read.image)
@@ -57,7 +60,18 @@ ColocalizeR <- function(dir) {
       lsm_meta[[i]] <- seriesMetadata(images_list[[i]])
     }
     lsm_bool <- TRUE
-  } else if (sum(grepl(".tif$", input_files)) / length(input_files) == 1) {
+  } else if (sum(grepl(".czi$", input_files)) / length(input_files) == 1) {
+    images_list <- parLapply(cl, input_files, read.image)
+    czi_meta <- list()
+    for (i in seq_along(images_list)) {
+      czi_meta[[i]] <- globalMetadata(images_list[[i]])
+    }
+    czi_bool <- TRUE
+    twelvebit_bool <- FALSE
+    sixteenbit_bool <- TRUE
+  }
+  
+  else if (sum(grepl(".tif$", input_files)) / length(input_files) == 1) {
     images_list <- parLapply(cl, input_files, read.image)
     tif_meta <- list()
     for (i in seq_along(images_list)) {
@@ -85,21 +99,40 @@ ColocalizeR <- function(dir) {
       img_name <- lif_meta[[i]]$`Image name`
     } else if (lsm_bool == TRUE) {
       img_name <- lsm_meta[[i]]$`Recording Name #1`
+    } else if (czi_bool == TRUE) {
+      img_name <- czi_meta[[i]]$`Information|Document|Name #1`
     } else if (tif_bool == TRUE) {
       img_name <- tif_meta[[i]]
+    }
+    
+
+    #Read number of frames before continuing, move to next file if <2
+    if (numberOfFrames(images_list[[i]]) >= 2) {
+      chan1_dt_16bit <- data.table(getFrame(images_list[[i]], chan1))
+      chan2_dt_16bit <- data.table(getFrame(images_list[[i]], chan2))
+    } else {
+      return("Only images with 2 channels or more can be analysed")
     }
     
     #Start pdf, plots will go in here
     pdf(paste(folder_name, "_", i, "_", img_name, ".pdf", sep = ""), paper = "a4")
     
-    chan1_dt <- data.table(getFrame(images_list[[i]], chan1))
-    chan2_dt <- data.table(getFrame(images_list[[i]], chan2))
+    chan1_dt_16bit <- data.table(getFrame(images_list[[i]], chan1))
+    chan2_dt_16bit <- data.table(getFrame(images_list[[i]], chan2))
     
     #Change pixel intensity scale from 0 to 1 to 0 to 4096
-    if (max(chan1_dt, na.rm = TRUE) <= 1) {
-      chan1_dt_16bit <- chan1_dt * 4096
-      chan2_dt_16bit <- chan2_dt * 4096
-    }
+    # if (twelvebit_bool == TRUE) { 
+    #   if (max(chan1_dt, na.rm = TRUE) <= 1) {
+    #     chan1_dt_16bit <- chan1_dt * 4096
+    #     chan2_dt_16bit <- chan2_dt * 4096
+    #   }
+    # } else if (sixteenbit_bool == TRUE) {
+    #   if (max(chan1_dt, na.rm = TRUE) <= 1) {
+    #     chan1_dt_16bit <- chan1_dt * 65536
+    #     chan2_dt_16bit <- chan2_dt * 65536
+    #   }
+    # }
+  
     
     #Plot histograms to show distributions of intensities
     #Data frames cannot be plotted as histograms, hence as.matrix
@@ -151,7 +184,10 @@ ColocalizeR <- function(dir) {
     print(i)
   }
   
-  parLapply(cl, seq_along(images_list), colocmainloop)  
+  parcoloc <- function(x) colocmainloop(x)
+  
+  #lapply(seq_along(images_list), function(x) colocmainloop(x))
+  parLapply(cl, seq_along(images_list), parcoloc)  
   stopCluster(cl)
   
 }
